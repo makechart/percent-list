@@ -1,0 +1,34 @@
+div
+  div(plug="layout")
+    .pdl-layout
+      div(data-type="layout")
+        .pdl-cell(data-name="view")
+        .pdl-cell(data-name="link")
+        .pdl-cell(data-name="legend")
+      div(data-type="render")
+  style(type="text/css"): :stylus
+    .pdl-layout > div[data-type=layout]
+      display: flex
+      justify-content: center
+      align-items: center
+      padding: .5em
+      & > [data-name=view]
+        height: 100%
+        min-width: 2.5em
+        margin-right: .5em
+        flex: 1 0 2.5em
+      & > [data-name=link]
+        height: 100%
+        width: 2.5em
+        margin-right: .5em
+        flex: 0 0 auto
+      & > [data-name=legend]
+        flex: 1 0 auto
+        width: fit-content
+        max-width: 60%
+        height: 100%
+        display: flex
+        flex-direction: column
+        justify-content: start
+        align-items: start
+  script(type="@plotdb/block"): include:lsc index.ls
