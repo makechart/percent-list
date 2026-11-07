@@ -1,7 +1,8 @@
 module.exports =
   pkg:
     name: 'percent-list', version: '0.0.1'
-    extend: {name: "@makechart/base"}
+    # lite: 不帶 d3 的 base. 補間改用 chart.anim, 可以逐格錄影 ( 見 @plotdb/chart utils/anim )
+    extend: {name: "@makechart/base", path: "lite/index.html"}
     dependencies: []
     i18n:
       "zh-TW": "other": "其它"
@@ -9,7 +10,9 @@ module.exports =
     pubsub.fire \init, mod: mod {context, t}
 
 mod = ({context, t}) ->
-  {chart,d3,wrapSvgText,debounce} = context
+  {chart,wrapSvgText} = context
+  {scale: Scale, debounce, anim: {join}} = chart.utils
+  svgns = "http://www.w3.org/2000/svg"
   sample: ->
     raw: [
       "Bachchan Pandey", "The Good Maharaja", "Ramprasad Ki Tehrvi",
@@ -30,13 +33,10 @@ mod = ({context, t}) ->
     value: {type: \R, name: "value", priority: 20}
     name: {type: \N, name: "name", priority: 10}
   init: ->
-    @g =
-      view: d3.select @layout.get-group \view
-      link: d3.select @layout.get-group \link
-      legend: d3.select @layout.get-group \legend
+    @g = Object.fromEntries <[view link legend]>.map ~> [it, @layout.get-group it]
     @tint = tint = new chart.utils.tint!
     @scale =
-      y: d3.scaleLinear!
+      y: Scale.linear!
     @layout.get-group \view .addEventListener \mousemove, (evt) ~>
       if !((n = evt.target) and n.nodeName.toLowerCase! == \rect) => return
       @idx = Array.from(n.parentNode.childNodes).indexOf(n)
@@ -116,85 +116,71 @@ mod = ({context, t}) ->
       # 整組標籤會被推到區塊底部然後掉出圖外. 全部放得下就不該捲, 也就是 0
       offset = offset >? 0
 
-    @g.view.selectAll \rect.data .data @parsed
-      ..exit!remove!
-      ..enter!append \rect .attr \class, \data
-    @g.view.selectAll \rect.data
-      ..attr \x, -> 0
-      ..attr \y, (d,i) -> scale.y(d.offset)
-      ..attr \width, -> box.width
-      ..attr \height, (d,i) -> (scale.y(d.offset + d.value) - scale.y(d.offset) - 1) >? 1
-      ..attr \fill-opacity, (d,i) -> picked-of d
-      ..attr \fill, (d,i) ->
-        c = color-of d, i
-        return if partial => self.subset.color(c) else c
-        ret = tint.get 0, (((i % 3) - 1) / 5)
-        if cfg.collapse.enabled =>
-          nbox = nboxes[i]
-          y1 = (nbox.y - rbox.y) + (nbox.height / 2)
-          if y1 < rbox.height => return ret
-          ret = ldcolor.hcl(ret)
-          ret.c = ret.c * 0.1
-          ret.l = ret.l * 1.1
-        return ldcolor.web(ret)
+    tween = (n, attrs) ~> @anim.tween n, attrs, {duration: 350}
+    drop = (n) ~>
+      @anim.interrupt n
+      n.remove!
+    rj = join root: @g.view, tag: \rect, cls: \data, data: @parsed
+    rj.exit.map drop
+    rj.nodes.map (n, i) ->
+      d = n.__data__
+      n.setAttribute \x, 0
+      n.setAttribute \y, scale.y(d.offset)
+      n.setAttribute \width, box.width
+      n.setAttribute \height, (scale.y(d.offset + d.value) - scale.y(d.offset) - 1) >? 1
+      n.setAttribute \fill-opacity, picked-of d
+      c = color-of d, i
+      n.setAttribute \fill, if partial => self.subset.color(c) else c
     # partial 的那一層: 蓋在上面但不吃事件, 點擊一律由底下那條處理
     subsets = if !partial => [] else @parsed
-    @g.view.selectAll \rect.subset .data subsets
-      ..exit!remove!
-      ..enter!append \rect .attr \class, \subset .style \pointer-events, \none
-    @g.view.selectAll \rect.subset
-      ..attr \x, -> 0
-      ..attr \y, (d,i) -> scale.y(d.offset)
-      ..attr \width, (d,i) -> box.width * ratio-of(d)
-      ..attr \height, (d,i) -> (scale.y(d.offset + d.value) - scale.y(d.offset) - 1) >? 1
-      ..attr \fill-opacity, (d,i) -> picked-of d
-      ..attr \fill, (d,i) -> color-of d, i
+    sj = join root: @g.view, tag: \rect, cls: \subset, data: subsets
+    sj.exit.map drop
+    sj.enter.map (n) -> n.style.pointerEvents = \none
+    sj.nodes.map (n, i) ->
+      d = n.__data__
+      n.setAttribute \x, 0
+      n.setAttribute \y, scale.y(d.offset)
+      n.setAttribute \width, box.width * ratio-of(d)
+      n.setAttribute \height, (scale.y(d.offset + d.value) - scale.y(d.offset) - 1) >? 1
+      n.setAttribute \fill-opacity, picked-of d
+      n.setAttribute \fill, color-of d, i
 
-    @g.legend.selectAll \g.label.data .data @parsed
-      ..exit!remove!
-      ..enter!append \g .attr \class, 'label data'
-    @g.legend.selectAll \g.label.data
-      .each (d,i) ->
-        if resized or @_text != d.text =>
-          @_text = d.text
-          n = layout.get-node \legend .childNodes[i]
-          ret = wrap-svg-text node: n, use-range: true
-          @textContent = ""
-          @appendChild ret
-      .transition!duration 350
-      .attr \opacity, (d,i) ->
-        nbox = nboxes[i]
-        y = nbox.y - rbox.y - offset
-        if y < 0 or y > rbox.height - nbox.height/2 => 0 else picked-of d
-      .attr \transform, (d,i) ->
-        nbox = nboxes[i]
-        "translate(#{nbox.x - rbox.x}, #{nbox.y - rbox.y - offset})"
-    @g.link.selectAll \path .data @parsed
-      ..exit!remove!
-      ..enter!append \path
-        .attr \fill, \none
-        .attr \stroke-width, 1
-    @g.link.selectAll \path
-      #.attr \stroke, cfg.line
-      .attr \stroke, (d,i) ->
-        return tint.get Math.ceil(((d.offset + d.value/2) / total) * 5)
-      .transition!duration 350
-      .attr \d, (d,i) ->
-        x0 = 0
-        x1 = lbox.width / 10
-        x2 = 9 * lbox.width / 10
-        x3 = lbox.width
-        y0 = scale.y(d.offset + d.value / 2)
-        nbox = nboxes[i]
-        y1 = (nbox.y - rbox.y) + (nbox.height / 2) - offset
-        if Math.abs(y1 - y0) < 2 => y1 = y0
-        "M#x0 #y0 L#x1 #y0 L#x2 #y1 L#x3 #y1"
-      .attr \opacity, (d,i) ->
-        nbox = nboxes[i]
-        y0 = scale.y(d.offset + d.value / 2)
-        y1 = (nbox.y - rbox.y) + (nbox.height / 2) - offset
-        if Math.abs(y1 - y0) < 2 => y1 = y0
-        return if y1 > (rbox.height) or y1 < 0 => 0 else picked-of d
+    lj = join root: @g.legend, tag: \g, cls: \label, data: @parsed
+    lj.exit.map drop
+    # 也帶 data class: host 代發 select 靠它 ( datum 有 _raw )
+    lj.enter.map -> it.classList.add \data
+    lj.nodes.map (n, i) ->
+      d = n.__data__
+      if resized or n._text != d.text =>
+        n._text = d.text
+        node = layout.get-node \legend .childNodes[i]
+        ret = wrap-svg-text node: node, use-range: true
+        n.textContent = ""
+        n.appendChild ret
+      nbox = nboxes[i]
+      y = nbox.y - rbox.y - offset
+      tween n, do
+        opacity: if y < 0 or y > rbox.height - nbox.height/2 => 0 else picked-of d
+        transform: "translate(#{nbox.x - rbox.x}, #{nbox.y - rbox.y - offset})"
+    pj = join root: @g.link, tag: \path, data: @parsed
+    pj.exit.map drop
+    pj.enter.map (n) ->
+      n.setAttribute \fill, \none
+      n.setAttribute \stroke-width, 1
+    pj.nodes.map (n, i) ->
+      d = n.__data__
+      n.setAttribute \stroke, tint.get Math.ceil(((d.offset + d.value/2) / total) * 5)
+      x0 = 0
+      x1 = lbox.width / 10
+      x2 = 9 * lbox.width / 10
+      x3 = lbox.width
+      y0 = scale.y(d.offset + d.value / 2)
+      nbox = nboxes[i]
+      y1 = (nbox.y - rbox.y) + (nbox.height / 2) - offset
+      if Math.abs(y1 - y0) < 2 => y1 = y0
+      tween n, do
+        d: "M#x0 #y0 L#x1 #y0 L#x2 #y1 L#x3 #y1"
+        opacity: if y1 > (rbox.height) or y1 < 0 => 0 else picked-of d
     @resized = false
 
   # 這張圖自己的工具方法. `local` 是核心保留給圖表的位置, 核心不管裡面有什麼,
